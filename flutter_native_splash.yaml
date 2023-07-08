@@ -1,0 +1,11 @@
+flutter_native_splash:
+  #color: "#ffffff"
+  background_image: "images/workclock.png"
+  image: "images/workclock.png"
+  branding: "images/workclock.png"
+  color_dark: "#121212"
+  image_dark: "images/workclock.png"
+  branding_dark: "images/workclock.png"
+
+  web: false
+  ios: false
