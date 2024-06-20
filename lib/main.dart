@@ -12,6 +12,7 @@ import 'package:fluttertoast/fluttertoast.dart';
 import 'package:battery_indicator/battery_indicator.dart';
 import 'package:parallax_rain/parallax_rain.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform;
 
 
 void main() async {
@@ -324,7 +325,8 @@ class _ClockPageState extends State<ClockPage> with SingleTickerProviderStateMix
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(10),
                   ),
-                  child: BatteryIndicator(
+                  child : defaultTargetPlatform == TargetPlatform.android
+                      ? BatteryIndicator(
                     style: BatteryIndicatorStyle.values[1],
                     colorful: false,
                     showPercentNum: false,
@@ -333,7 +335,18 @@ class _ClockPageState extends State<ClockPage> with SingleTickerProviderStateMix
                     ratio: 1.5,
                     showPercentSlide: true,
                     percentNumSize: 50,
-                  ),
+                  )
+                      : Container(),
+                  // child: BatteryIndicator(
+                  //   style: BatteryIndicatorStyle.values[1],
+                  //   colorful: false,
+                  //   showPercentNum: false,
+                  //   mainColor: _currentBackgroundGradient.colors.last,
+                  //   size: 44,
+                  //   ratio: 1.5,
+                  //   showPercentSlide: true,
+                  //   percentNumSize: 50,
+                  // ),
                 ),
               ),
             ],
@@ -389,7 +402,7 @@ class _ClockPageState extends State<ClockPage> with SingleTickerProviderStateMix
                     child: Text(
                       timezone,
                       style: const TextStyle(
-                        color: Colors.white, // Set the text color of the DropdownMenuItem
+                        color: Colors.white,
                       ),
                     ),
                   );
@@ -428,7 +441,7 @@ class _ClockPageState extends State<ClockPage> with SingleTickerProviderStateMix
                     child: Text(
                       timezone,
                       style: const TextStyle(
-                        color: Colors.white, // Set the text color of the DropdownMenuItem
+                        color: Colors.white,
                       ),
                     ),
                   );
@@ -473,12 +486,9 @@ class _ClockPageState extends State<ClockPage> with SingleTickerProviderStateMix
         );
       },
     ).then((value) {
-      // Handle the selected option
       if (value != null) {
-        // Perform actions based on the selected option
       }
     }).whenComplete(() {
-      // Call setState to refresh the widget after the menu is closed
       setState(() {});
     });
   }
@@ -548,7 +558,6 @@ class _ClockPageState extends State<ClockPage> with SingleTickerProviderStateMix
                                 textColor: Colors.white,
                                 fontSize: 40.0,
                               );
-                              // Add your logic or navigate to a different screen
                             },
                             child: Text(
                               workDays.replaceAll('|', ''),
@@ -643,7 +652,6 @@ class _ClockPageState extends State<ClockPage> with SingleTickerProviderStateMix
     return Scaffold(
       floatingActionButton: FloatingActionButton(
         onPressed: () {
-          // Perform your desired action here
           toggleParallaxRainVisibility();
           if(isParallaxRainVisible){
             _writeSharedPreferences(parallaxVisible: true);
@@ -652,10 +660,10 @@ class _ClockPageState extends State<ClockPage> with SingleTickerProviderStateMix
           }
 
         },
-        backgroundColor: _currentBackgroundGradient.colors.last.withOpacity(0.3), // Set the icon color
-        elevation: 0.0, // Set the elevation of the button
+        backgroundColor: _currentBackgroundGradient.colors.last.withOpacity(0.3),
+        elevation: 0.0,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(100.0), // Set a circular border radius
+          borderRadius: BorderRadius.circular(100.0),
         ),
         child: Icon(
           Icons.landscape,
