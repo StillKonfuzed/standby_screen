@@ -1,16 +1,11 @@
-# standby_screen
+# Work Clock
+A simple clock app that switches between 2 selected timeszone every 6 seconds.
+Also it shows how many more days you have got work and holidays.
 
-A new Flutter project.
 
-## Getting Started
 
-This project is a starting point for a Flutter application.
+![image](https://github.com/user-attachments/assets/798b9064-83fe-4bb5-89b6-cfbd27e6598a)
 
-A few resources to get you started if this is your first Flutter project:
+![image](https://github.com/user-attachments/assets/b4f02827-9c8d-4ae7-8d14-7551a1ddb3b2)
 
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+![image](https://github.com/user-attachments/assets/46085cb6-f703-4c10-b62c-cfd067725446)
