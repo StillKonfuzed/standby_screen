@@ -2,7 +2,9 @@
 A simple clock app that switches between 2 selected timeszone every 6 seconds.
 Also it shows how many more days you have got work and holidays.
 
+Project is already deployed on my server, see here : https://stillkonfuzed.com/Clock/
 
+Project is already on playstore, install here : https://play.google.com/store/apps/details?id=standby.stillkonfuzed.com.standby_screen&hl=en
 
 ![image](https://github.com/user-attachments/assets/798b9064-83fe-4bb5-89b6-cfbd27e6598a)
 
