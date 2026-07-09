@@ -1,12 +1,12 @@
 buildscript {
-    ext.kotlin_version = '1.7.10'
+    ext.kotlin_version = '2.4.0'
     repositories {
         google()
         mavenCentral()
     }
 
     dependencies {
-        classpath 'com.android.tools.build:gradle:7.3.1'
+        classpath 'com.android.tools.build:gradle:9.2.1'
         classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
 
     }
@@ -29,4 +29,33 @@ subprojects {
 
 tasks.register("clean", Delete) {
     delete rootProject.buildDir
+}
+
+
+subprojects { project ->
+    // 1. The Namespace Fix
+    def injectNamespace = {
+        if (project.hasProperty('android') && project.android.namespace == null) {
+            project.android.compileSdkVersion = 36
+            project.android.namespace = project.group.toString()
+        }
+    }
+
+    if (project.state.executed) {
+        injectNamespace()
+    } else {
+        project.afterEvaluate { injectNamespace() }
+    }
+
+    // 2. The JVM Target Fix
+    project.tasks.withType(JavaCompile).configureEach {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    project.tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+        kotlinOptions {
+            jvmTarget = "17"
+        }
+    }
 }

@@ -1,0 +1,764 @@
+import 'dart:async';
+import 'dart:math';
+
+import 'package:battery_plus/battery_plus.dart';
+import 'package:flutter/foundation.dart' show TargetPlatform, defaultTargetPlatform;
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:intl/intl.dart';
+import 'package:parallax_rain/parallax_rain.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:timezone/data/latest.dart' as tz;
+import 'package:timezone/timezone.dart' as tz;
+import 'package:wakelock_plus/wakelock_plus.dart';
+
+import 'gradient_colors.dart';
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // Initialize timezones before everything else
+  tz.initializeTimeZones();
+
+  final prefs = await SharedPreferences.getInstance();
+  final bool isStartupValuesSet = prefs.getBool('startupValuesSet') ?? false;
+  if (!isStartupValuesSet) {
+    // Set the default startup values
+    await prefs.setString('timezone1', 'Asia/Kolkata');
+    await prefs.setString('timezone2', 'America/New_York');
+    await prefs.setBool('parallaxVisible', false);
+    await prefs.setBool('startupValuesSet', true);
+  }
+
+  runApp(const ClockApp());
+}
+
+class ClockApp extends StatelessWidget {
+  const ClockApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Work Clock',
+      theme: ThemeData(
+        primarySwatch: Colors.blue,
+        fontFamily: 'Alata',
+        useMaterial3: true,
+      ),
+      debugShowCheckedModeBanner: false,
+      home: const ClockPage(),
+    );
+  }
+}
+
+class ClockPage extends StatefulWidget {
+  const ClockPage({super.key});
+
+  @override
+  State<ClockPage> createState() => _ClockPageState();
+}
+
+class _ClockPageState extends State<ClockPage> with SingleTickerProviderStateMixin, WidgetsBindingObserver {
+  Timer? _clockTimer;
+  Timer? _backgroundTimer;
+
+  final Battery _battery = Battery();
+  final ValueNotifier<int> _batteryLevelNotifier = ValueNotifier<int>(100);
+  final ValueNotifier<BatteryState> _batteryStateNotifier = ValueNotifier<BatteryState>(BatteryState.unknown);
+  StreamSubscription<BatteryState>? _batterySubscription;
+
+  final ValueNotifier<String> _timeNotifier = ValueNotifier<String>('');
+  final ValueNotifier<String> _currentDayNotifier = ValueNotifier<String>('');
+  final ValueNotifier<String> _timeZoneLocationNotifier = ValueNotifier<String>('');
+  final ValueNotifier<LinearGradient> _currentBackgroundGradientNotifier = ValueNotifier<LinearGradient>(const LinearGradient(colors: [Colors.blue, Colors.purple]));
+  final ValueNotifier<String> _remainingWorkDaysNotifier = ValueNotifier<String>('');
+
+  bool _isPrimaryTimezoneVisible = true;
+  String _timeZoneOne = 'Asia/Kolkata';
+  String _timeZoneTwo = 'America/New_York';
+  final ValueNotifier<bool> _isParallaxRainVisibleNotifier = ValueNotifier<bool>(false);
+  final ValueNotifier<bool> _isManualBlackAndWhiteNotifier = ValueNotifier<bool>(false);
+
+  final Random _random = Random();
+  late final List<String> _availableTimezones;
+
+  // Cached objects for efficiency
+  final DateFormat _timeFormatter = DateFormat('h:mm a');
+  final DateFormat _dayFormatter = DateFormat('EEEE, d');
+  int _lastCalculatedDay = -1;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _availableTimezones = tz.timeZoneDatabase.locations.keys
+        .where((timezone) => timezone != 'UTC' && timezone != 'GMT')
+        .toList();
+
+    _currentBackgroundGradientNotifier.value = _getRandomBackgroundGradient();
+    
+    // Set initial values
+    _updateTimeDisplay();
+    _checkAndCalculateWorkDays();
+
+    _loadSettings();
+    _startTimers();
+    _initBattery();
+    
+    WakelockPlus.enable();
+    
+    // System configuration
+    _setSystemUI();
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
+  }
+
+  void _setSystemUI() {
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _setSystemUI();
+      _updateTimeDisplay();
+      _checkAndCalculateWorkDays();
+    }
+  }
+
+  void _checkAndCalculateWorkDays() {
+    final now = DateTime.now();
+    if (now.day != _lastCalculatedDay) {
+      _lastCalculatedDay = now.day;
+      _remainingWorkDaysNotifier.value = _calculateRemainingWorkingDays();
+    }
+  }
+
+  Future<void> _loadSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) {
+      _timeZoneOne = prefs.getString('timezone1') ?? 'Asia/Kolkata';
+      _timeZoneTwo = prefs.getString('timezone2') ?? 'America/New_York';
+      _isParallaxRainVisibleNotifier.value = prefs.getBool('parallaxVisible') ?? false;
+      _isManualBlackAndWhiteNotifier.value = prefs.getBool('manualBlackAndWhite') ?? false;
+      _updateTimeDisplay();
+    }
+  }
+
+  Future<void> _updateSettings({String? timezone1, String? timezone2, bool? parallaxVisible, bool? manualBlackAndWhite}) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (timezone1 != null) {
+      _timeZoneOne = timezone1;
+      await prefs.setString('timezone1', timezone1);
+    }
+    if (timezone2 != null) {
+      _timeZoneTwo = timezone2;
+      await prefs.setString('timezone2', timezone2);
+    }
+    if (parallaxVisible != null) {
+      _isParallaxRainVisibleNotifier.value = parallaxVisible;
+      await prefs.setBool('parallaxVisible', parallaxVisible);
+    }
+    if (manualBlackAndWhite != null) {
+      _isManualBlackAndWhiteNotifier.value = manualBlackAndWhite;
+      await prefs.setBool('manualBlackAndWhite', manualBlackAndWhite);
+    }
+    if (mounted) {
+      _updateTimeDisplay();
+    }
+  }
+
+  void _startTimers() {
+    _clockTimer = Timer.periodic(const Duration(seconds: 6), (timer) {
+      if (mounted) {
+        _isPrimaryTimezoneVisible = !_isPrimaryTimezoneVisible;
+        _updateTimeDisplay();
+        _checkAndCalculateWorkDays();
+      }
+    });
+
+    _backgroundTimer = Timer.periodic(const Duration(seconds: 6), (timer) {
+      if (mounted) {
+        // Only update background if not in battery saver mode (unplugged)
+        final bool isUnplugged = _batteryStateNotifier.value != BatteryState.charging && _batteryStateNotifier.value != BatteryState.full;
+        if (!isUnplugged && !_isManualBlackAndWhiteNotifier.value) {
+          _currentBackgroundGradientNotifier.value = _getRandomBackgroundGradient();
+        }
+      }
+    });
+  }
+
+  void _updateTimeDisplay() {
+    final activeTimezone = _isPrimaryTimezoneVisible ? _timeZoneOne : _timeZoneTwo;
+    final location = tz.getLocation(activeTimezone);
+    final now = tz.TZDateTime.now(location);
+
+    _timeNotifier.value = _timeFormatter.format(now);
+    
+    final day = now.day;
+    final suffix = _getNumberSuffix(day);
+    _currentDayNotifier.value = '${_dayFormatter.format(now)}$suffix';
+    
+    _timeZoneLocationNotifier.value = location.name.split('/').last.replaceAll('_', ' ');
+  }
+
+  String _getNumberSuffix(int number) {
+    if (number >= 11 && number <= 13) return 'th';
+    switch (number % 10) {
+      case 1: return 'st';
+      case 2: return 'nd';
+      case 3: return 'rd';
+      default: return 'th';
+    }
+  }
+
+  LinearGradient _getRandomBackgroundGradient() {
+    if (PresetColors.backgroundGradients.isEmpty) {
+      return const LinearGradient(colors: [Colors.blue, Colors.purple]);
+    }
+    return PresetColors.backgroundGradients[_random.nextInt(PresetColors.backgroundGradients.length)];
+  }
+
+  String _calculateRemainingWorkingDays() {
+    final now = DateTime.now();
+    final lastDayOfMonth = DateTime(now.year, now.month + 1, 0).day;
+
+    int workingDays = 0;
+    int restDays = 0;
+
+    for (int i = now.day + 1; i <= lastDayOfMonth; i++) {
+      final date = DateTime(now.year, now.month, i);
+      if (date.weekday >= DateTime.monday && date.weekday <= DateTime.friday) {
+        workingDays++;
+      } else {
+        restDays++;
+      }
+    }
+    return '$workingDays | $restDays';
+  }
+
+  void _initBattery() async {
+    final level = await _battery.batteryLevel;
+    _batterySubscription = _battery.onBatteryStateChanged.listen((state) {
+      if (mounted) {
+        _batteryStateNotifier.value = state;
+      }
+    });
+
+    if (mounted) {
+      _batteryLevelNotifier.value = level;
+    }
+
+    // Update battery level periodically
+    Timer.periodic(const Duration(minutes: 1), (timer) async {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      final level = await _battery.batteryLevel;
+      _batteryLevelNotifier.value = level;
+    });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _clockTimer?.cancel();
+    _backgroundTimer?.cancel();
+    _batterySubscription?.cancel();
+    _batteryLevelNotifier.dispose();
+    _batteryStateNotifier.dispose();
+    _timeNotifier.dispose();
+    _currentDayNotifier.dispose();
+    _timeZoneLocationNotifier.dispose();
+    _currentBackgroundGradientNotifier.dispose();
+    _remainingWorkDaysNotifier.dispose();
+    _isParallaxRainVisibleNotifier.dispose();
+    _isManualBlackAndWhiteNotifier.dispose();
+    super.dispose();
+  }
+
+  Widget _buildTimeWidget() {
+    return ValueListenableBuilder<BatteryState>(
+      valueListenable: _batteryStateNotifier,
+      builder: (context, batteryState, _) {
+        return ValueListenableBuilder<bool>(
+          valueListenable: _isManualBlackAndWhiteNotifier,
+          builder: (context, isManualBW, _) {
+            final bool isUnplugged = batteryState != BatteryState.charging && batteryState != BatteryState.full;
+            final bool isBatterySaver = isUnplugged || isManualBW;
+
+            return ValueListenableBuilder<String>(
+              valueListenable: _timeNotifier,
+              builder: (context, time, _) {
+                return ValueListenableBuilder<LinearGradient>(
+                  valueListenable: _currentBackgroundGradientNotifier,
+                  builder: (context, gradient, _) {
+                    return TweenAnimationBuilder<double>(
+                      tween: Tween<double>(begin: 0, end: 1),
+                      duration: const Duration(milliseconds: 500),
+                      builder: (context, value, child) {
+                        if (isBatterySaver) {
+                          return Opacity(opacity: value, child: child);
+                        }
+                        return ShaderMask(
+                          shaderCallback: (bounds) => gradient.createShader(bounds),
+                          child: Opacity(opacity: value, child: child),
+                        );
+                      },
+                      child: AnimatedSwitcher(
+                        duration: isBatterySaver ? Duration.zero : const Duration(milliseconds: 500),
+                        transitionBuilder: (child, animation) => FadeTransition(opacity: animation, child: child),
+                        child: FittedBox(
+                          fit: BoxFit.contain,
+                          child: Text(
+                            time,
+                            key: ValueKey<String>(time),
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              fontSize: 400,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white,
+                              letterSpacing: -5,
+                              height: 1.0,
+                              shadows: [
+                                Shadow(
+                                  color: Colors.black,
+                                  blurRadius: 15,
+                                  offset: Offset(4, 4),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                );
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildCurrentDayWidget() {
+    return ValueListenableBuilder<BatteryState>(
+      valueListenable: _batteryStateNotifier,
+      builder: (context, batteryState, _) {
+        return ValueListenableBuilder<bool>(
+          valueListenable: _isManualBlackAndWhiteNotifier,
+          builder: (context, isManualBW, _) {
+            final bool isUnplugged = batteryState != BatteryState.charging && batteryState != BatteryState.full;
+            final bool isBatterySaver = isUnplugged || isManualBW;
+
+            return ValueListenableBuilder<String>(
+              valueListenable: _currentDayNotifier,
+              builder: (context, currentDay, _) {
+                final text = Text(
+                  currentDay,
+                  style: TextStyle(
+                    fontSize: MediaQuery.of(context).size.width * 0.05,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                    shadows: [
+                      Shadow(
+                        color: Colors.black.withOpacity(0.5),
+                        blurRadius: 8,
+                        offset: const Offset(1, 1),
+                      ),
+                    ],
+                  ),
+                );
+
+                if (isBatterySaver) return text;
+
+                return ValueListenableBuilder<LinearGradient>(
+                  valueListenable: _currentBackgroundGradientNotifier,
+                  builder: (context, gradient, _) {
+                    return ShaderMask(
+                      shaderCallback: (bounds) => gradient.createShader(bounds),
+                      child: text,
+                    );
+                  },
+                );
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildCustomBatteryIndicator() {
+    return ValueListenableBuilder<BatteryState>(
+      valueListenable: _batteryStateNotifier,
+      builder: (context, batteryState, _) {
+        final bool isCharging = batteryState == BatteryState.charging;
+        return ValueListenableBuilder<int>(
+          valueListenable: _batteryLevelNotifier,
+          builder: (context, batteryLevel, _) {
+            return ValueListenableBuilder<LinearGradient>(
+              valueListenable: _currentBackgroundGradientNotifier,
+              builder: (context, gradient, _) {
+                final color = gradient.colors.last.withOpacity(0.8);
+                return RepaintBoundary(
+                  child: Container(
+                    width: 95,
+                    height: 45,
+                    padding: const EdgeInsets.all(3),
+                    decoration: BoxDecoration(
+                      border: Border.all(color: color, width: 3.5),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Stack(
+                      children: [
+                        FractionallySizedBox(
+                          widthFactor: batteryLevel / 100.0,
+                          child: Container(
+                            decoration: BoxDecoration( 
+                              color: color,
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                          ),
+                        ),
+                        Center(
+                          child: isCharging
+                              ? const Icon(
+                                  Icons.bolt,
+                                  size: 36,
+                                  color: Colors.white,
+                                )
+                              : Text(
+                                  '$batteryLevel%',
+                                  style: const TextStyle(
+                                    fontSize: 22,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _showSettingsDialog() {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return ValueListenableBuilder<LinearGradient>(
+          valueListenable: _currentBackgroundGradientNotifier,
+          builder: (context, gradient, _) {
+            return AlertDialog(
+              backgroundColor: Colors.transparent,
+              contentPadding: EdgeInsets.zero,
+              insetPadding: const EdgeInsets.symmetric(horizontal: 40, vertical: 24),
+              content: Container(
+                padding: const EdgeInsets.all(24),
+                decoration: BoxDecoration(
+                  gradient: gradient,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      'Clock Settings',
+                      style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.white),
+                    ),
+                    const SizedBox(height: 24),
+                    _buildTimezoneDropdown('Primary Timezone', _timeZoneOne, (val) {
+                      if (val != null) _updateSettings(timezone1: val);
+                    }),
+                    const SizedBox(height: 20),
+                    _buildTimezoneDropdown('Secondary Timezone', _timeZoneTwo, (val) {
+                      if (val != null) _updateSettings(timezone2: val);
+                    }),
+                    const SizedBox(height: 24),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text('Close', style: TextStyle(color: Colors.white, fontSize: 16)),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildTimezoneDropdown(String label, String value, ValueChanged<String?> onChanged) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white70)),
+        DropdownButton<String>(
+          isExpanded: true,
+          value: value,
+          dropdownColor: _currentBackgroundGradientNotifier.value.colors.first,
+          iconEnabledColor: Colors.white,
+          underline: Container(height: 1, color: Colors.white30),
+          items: _availableTimezones.map((tz) {
+            return DropdownMenuItem(value: tz, child: Text(tz, style: const TextStyle(color: Colors.white)));
+          }).toList(),
+          onChanged: (val) {
+            onChanged(val);
+            Navigator.pop(context);
+          },
+        ),
+      ],
+    );
+  }
+
+  Widget _buildFooterWidget() {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+      children: [
+        ValueListenableBuilder<String>(
+          valueListenable: _timeZoneLocationNotifier,
+          builder: (context, location, _) {
+            return GestureDetector(
+              onTap: _showSettingsDialog,
+              child: _buildStyledText(location, fontSizeFactor: 0.04),
+            );
+          },
+        ),
+        ValueListenableBuilder<String>(
+          valueListenable: _remainingWorkDaysNotifier,
+          builder: (context, workDays, _) {
+            return GestureDetector(
+              onTap: () {
+                final parts = workDays.split(' | ');
+                ScaffoldMessenger.of(context).clearSnackBars();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      "Work: ${parts[0]} days | Rest: ${parts[1]} days remaining",
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                    ),
+                    backgroundColor: _currentBackgroundGradientNotifier.value.colors.first.withOpacity(0.9),
+                    behavior: SnackBarBehavior.floating,
+                    duration: const Duration(seconds: 4),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                    margin: EdgeInsets.symmetric(
+                      horizontal: MediaQuery.of(context).size.width * 0.2,
+                      vertical: 20,
+                    ),
+                  ),
+                );
+              },
+              child: _buildStyledText(workDays.replaceAll(' | ', ' '), fontSizeFactor: 0.04),
+            );
+          },
+        ),
+      ],
+    );
+  }
+
+  Widget _buildStyledText(String text, {required double fontSizeFactor}) {
+    return ValueListenableBuilder<BatteryState>(
+      valueListenable: _batteryStateNotifier,
+      builder: (context, batteryState, _) {
+        return ValueListenableBuilder<bool>(
+          valueListenable: _isManualBlackAndWhiteNotifier,
+          builder: (context, isManualBW, _) {
+            final bool isUnplugged = batteryState != BatteryState.charging && batteryState != BatteryState.full;
+            final bool isBatterySaver = isUnplugged || isManualBW;
+
+            final textWidget = Text(
+              text,
+              style: TextStyle(
+                fontSize: MediaQuery.of(context).size.width * fontSizeFactor,
+                fontWeight: FontWeight.bold,
+                color: Colors.white,
+                shadows: [
+                  Shadow(
+                    color: Colors.black.withOpacity(0.5),
+                    blurRadius: 8,
+                    offset: const Offset(1, 1),
+                  ),
+                ],
+              ),
+            );
+
+            if (isBatterySaver) return textWidget;
+
+            return ValueListenableBuilder<LinearGradient>(
+              valueListenable: _currentBackgroundGradientNotifier,
+              builder: (context, gradient, _) {
+                return ShaderMask(
+                  shaderCallback: (bounds) => gradient.createShader(bounds),
+                  child: textWidget,
+                );
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final mainContent = Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(top: 10), 
+          child: _buildCurrentDayWidget(),
+        ),
+        Expanded(
+          flex: 8,
+          child: Center(child: _buildTimeWidget()),
+        ),
+        Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: _buildFooterWidget(),
+        ),
+      ],
+    );
+
+    final bodyContent = Stack(
+      children: [
+        SafeArea(
+          left: true,
+          right: true,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 40),
+            child: mainContent,
+          ),
+        ),
+        if (defaultTargetPlatform == TargetPlatform.android)
+          Positioned(
+            top: 20,
+            right: 20, 
+            child: _buildCustomBatteryIndicator(),
+          ),
+      ],
+    );
+
+    return Scaffold(
+      body: ValueListenableBuilder<BatteryState>(
+        valueListenable: _batteryStateNotifier,
+        builder: (context, batteryState, _) {
+          return ValueListenableBuilder<bool>(
+            valueListenable: _isManualBlackAndWhiteNotifier,
+            builder: (context, isManualBW, _) {
+              final bool isUnplugged = batteryState != BatteryState.charging && batteryState != BatteryState.full;
+              final bool isBatterySaver = isUnplugged || isManualBW;
+
+              return ValueListenableBuilder<bool>(
+                valueListenable: _isParallaxRainVisibleNotifier,
+                builder: (context, isParallaxVisible, _) {
+                  return Container(
+                    color: (isBatterySaver || isParallaxVisible) ? Colors.black : Colors.white,
+                    child: AnimatedSwitcher(
+                      duration: isBatterySaver ? Duration.zero : const Duration(seconds: 1),
+                      child: (isParallaxVisible && !isBatterySaver)
+                          ? RepaintBoundary(
+                              key: const ValueKey('parallax_layer'),
+                              child: ParallaxRain(
+                                key: const ValueKey('parallax'),
+                                dropColors: const [
+                                  Colors.red, Colors.green, Colors.blue, Colors.yellow,
+                                  Colors.brown, Colors.blueGrey, Colors.purpleAccent, Colors.cyanAccent,
+                                ],
+                                dropWidth: 1,
+                                dropHeight: 50,
+                                numberOfDrops: 200,
+                                child: bodyContent,
+                              ),
+                            )
+                          : ValueListenableBuilder<LinearGradient>(
+                              valueListenable: _currentBackgroundGradientNotifier,
+                              builder: (context, gradient, _) {
+                                return RepaintBoundary(
+                                  key: const ValueKey('gradient_layer'),
+                                  child: AnimatedContainer(
+                                    key: const ValueKey('gradient'),
+                                    duration: isBatterySaver ? Duration.zero : const Duration(seconds: 6),
+                                    decoration: BoxDecoration(
+                                      color: isBatterySaver ? Colors.black : null,
+                                      gradient: isBatterySaver ? null : gradient,
+                                    ),
+                                    child: bodyContent,
+                                  ),
+                                );
+                              },
+                            ),
+                    ),
+                  );
+                },
+              );
+            },
+          );
+        },
+      ),
+      floatingActionButton: ValueListenableBuilder<BatteryState>(
+        valueListenable: _batteryStateNotifier,
+        builder: (context, batteryState, _) {
+          final bool isUnplugged = batteryState != BatteryState.charging && batteryState != BatteryState.full;
+          if (isUnplugged) return const SizedBox.shrink();
+
+          return ValueListenableBuilder<bool>(
+            valueListenable: _isManualBlackAndWhiteNotifier,
+            builder: (context, isManualBW, _) {
+              return ValueListenableBuilder<bool>(
+                valueListenable: _isParallaxRainVisibleNotifier,
+                builder: (context, isParallaxVisible, _) {
+                  return ValueListenableBuilder<LinearGradient>(
+                    valueListenable: _currentBackgroundGradientNotifier,
+                    builder: (context, gradient, _) {
+                      final bool isBatterySaver = isManualBW;
+                      return FloatingActionButton(
+                        onPressed: () {
+                          if (!isParallaxVisible && !isManualBW) {
+                            _updateSettings(parallaxVisible: true, manualBlackAndWhite: false);
+                          } else if (isParallaxVisible) {
+                            _updateSettings(parallaxVisible: false, manualBlackAndWhite: true);
+                          } else {
+                            _updateSettings(parallaxVisible: false, manualBlackAndWhite: false);
+                          }
+                        },
+                        backgroundColor: isBatterySaver
+                            ? Colors.grey.withOpacity(0.3)
+                            : gradient.colors.last.withOpacity(0.3),
+                        elevation: 0,
+                        shape: const CircleBorder(),
+                        child: Icon(
+                          isParallaxVisible 
+                              ? Icons.nightlight_round 
+                              : (isManualBW ? Icons.color_lens : Icons.landscape),
+                          color: isBatterySaver
+                              ? Colors.white.withOpacity(0.5)
+                              : gradient.colors.first.withOpacity(0.5),
+                        ),
+                      );
+                    },
+                  );
+                },
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+}
